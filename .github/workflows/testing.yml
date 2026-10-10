@@ -234,7 +234,7 @@ jobs:
         
         cd work
         curl --fail --location --show-error --retry 1 --retry-all-errors --connect-timeout 30 --max-time 900 --progress-bar "$URL" -o rom_package
-       if [ ! -s "rom_package" ]; then echo "::error::GSI download failed or empty."; exit 1; fi
+        if [ ! -s "rom_package" ]; then echo "::error::GSI download failed or empty."; exit 1; fi
         
         # Detect and Extract
         TYPE=$(file -b rom_package)
