@@ -143,6 +143,41 @@ jobs:
     # --------------------------------------------------------------------------
     # 2. Base Firmware Acquisition (Stock Super via Samloader)
     # --------------------------------------------------------------------------
+    - name: Download Custom System (GSI Mode)
+      if: github.event.inputs.enable_oem_port == 'false'
+      run: |
+        echo "==> GSI/ROM Download Mode."
+        URL="${{ github.event.inputs.custom_system_url }}"
+        if [ -z "$URL" ]; then echo "::error::Custom System URL is required." && exit 1; fi
+
+        CLEAN_URL="${URL%%\?*}"
+        ROM_NAME=$(basename "$CLEAN_URL")
+        echo "ROM_NAME=$ROM_NAME" >> $GITHUB_ENV
+        
+        cd work
+        curl --fail --location --show-error --retry 1 --retry-all-errors --connect-timeout 30 --max-time 600 --progress-bar "$URL" -o rom_package
+       if [ ! -s "rom_package" ]; then echo "::error::Custom ROM download failed or empty."; exit 1; fi
+        
+        # Detect and Extract
+        TYPE=$(file -b rom_package)
+        echo "File Type: $TYPE"
+        
+        if [[ "$TYPE" == *"XZ compressed"* ]]; then mv rom_package s.xz; unxz s.xz; mv s custom_system.img
+        elif [[ "$TYPE" == *"gzip compressed"* ]]; then mv rom_package s.gz; gzip -d s.gz; mv s custom_system.img
+        elif [[ "$TYPE" == *"Zip archive"* ]]; then unzip -o rom_package
+        elif [[ "$TYPE" == *"7-zip"* ]]; then 7z x rom_package
+        else mv rom_package custom_system.img; fi
+        
+        # Ensure we have the .img
+        if [ ! -f "custom_system.img" ]; then
+           FIND=$(find . -maxdepth 2 -name "*.img" ! -name "stock_super_sparse.img" | head -n1)
+           if [ -n "$FIND" ]; then mv "$FIND" custom_system.img; else echo "::error::Extraction failed." && exit 1; fi
+         fi
+
+    # --------------------------------------------------------------------------
+    # 3.5. Download Branding Assets (REMOVE = VIOLATE LICENSE)
+    # --------------------------------------------------------------------------
+
     - name: Download Base Firmware
       env:
         SAMLOADER_IMEI: ${{ secrets.SAMLOADER_IMEI }}
@@ -221,39 +256,6 @@ jobs:
         chmod +x ./scripts/patch_firmware.sh
         sudo ./scripts/patch_firmware.sh --super work/stock_super_sparse.img work/patched_partitions
 
-    - name: Download Custom System (GSI Mode)
-      if: github.event.inputs.enable_oem_port == 'false'
-      run: |
-        echo "==> GSI/ROM Download Mode."
-        URL="${{ github.event.inputs.custom_system_url }}"
-        if [ -z "$URL" ]; then echo "::error::Custom System URL is required." && exit 1; fi
-
-        CLEAN_URL="${URL%%\?*}"
-        ROM_NAME=$(basename "$CLEAN_URL")
-        echo "ROM_NAME=$ROM_NAME" >> $GITHUB_ENV
-        
-        cd work
-        wget -q -O rom_package "$URL"
-        
-        # Detect and Extract
-        TYPE=$(file -b rom_package)
-        echo "File Type: $TYPE"
-        
-        if [[ "$TYPE" == *"XZ compressed"* ]]; then mv rom_package s.xz; unxz s.xz; mv s custom_system.img
-        elif [[ "$TYPE" == *"gzip compressed"* ]]; then mv rom_package s.gz; gzip -d s.gz; mv s custom_system.img
-        elif [[ "$TYPE" == *"Zip archive"* ]]; then unzip -o rom_package
-        elif [[ "$TYPE" == *"7-zip"* ]]; then 7z x rom_package
-        else mv rom_package custom_system.img; fi
-        
-        # Ensure we have the .img
-        if [ ! -f "custom_system.img" ]; then
-           FIND=$(find . -maxdepth 2 -name "*.img" ! -name "stock_super_sparse.img" | head -n1)
-           if [ -n "$FIND" ]; then mv "$FIND" custom_system.img; else echo "::error::Extraction failed." && exit 1; fi
-         fi
-
-    # --------------------------------------------------------------------------
-    # 3.5. Download Branding Assets (REMOVE = VIOLATE LICENSE)
-    # --------------------------------------------------------------------------
     - name: Download ASRControl APK
       run: |
         wget -q -O work/ASRControl.apk "https://github.com/minhmc2007/minhmc2007/releases/download/v0.0.1/app-debug.apk" || echo "Warning: APK download failed."
