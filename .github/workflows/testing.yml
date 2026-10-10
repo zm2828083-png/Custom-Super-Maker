@@ -13,10 +13,6 @@ on:
         required: true
         type: string
         default: 'XXV'
-      base_imei:
-        description: 'Base: IMEI (15-digit, matching the base model)'
-        required: true
-        type: string
 
       # --- Custom ROM Source (System Image) ---
       enable_oem_port:
@@ -148,11 +144,13 @@ jobs:
     # 2. Base Firmware Acquisition (Stock Super via Samloader)
     # --------------------------------------------------------------------------
     - name: Download Base Firmware
+      env:
+        SAMLOADER_IMEI: ${{ secrets.SAMLOADER_IMEI }}
       run: |
         cd work
         MODEL="${{ github.event.inputs.base_model }}"
         CSC="${{ github.event.inputs.base_csc }}"
-        IMEI="${{ github.event.inputs.base_imei }}"
+        IMEI="$SAMLOADER_IMEI"
         
         echo "==> Checking Base Firmware Version..."
         VERSION_BASE=$(python3 -m samloader -m "$MODEL" -r "$CSC" -i "$IMEI" checkupdate 2>/dev/null)
