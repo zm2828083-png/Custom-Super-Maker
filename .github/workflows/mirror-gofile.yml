@@ -9,7 +9,7 @@ jobs:
     steps:
       - name: Download existing GoFile archive
         env:
-          SHARE_ID: NqzVnLz6
+          SHARE_ID: mj5HVlRX
           TARGET_NAME: super_repack_38092128263.tar
         run: |
           python3 - <<'PY'
