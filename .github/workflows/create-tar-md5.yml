@@ -1,0 +1,106 @@
+name: Create TAR.MD5 from existing A12s build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download existing TAR artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: super-repack-38092128263
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: 38094123361
+          path: /tmp/source
+
+      - name: Create and verify TAR.MD5
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC=$(find /tmp/source -type f -name 'super_repack_38092128263.tar' -print -quit)
+          if [ -z "$SRC" ]; then
+            echo "ERROR: Existing TAR archive not found."
+            find /tmp/source -maxdepth 3 -type f -ls
+            exit 1
+          fi
+
+          tar -tf "$SRC" > /tmp/tar-list.txt
+          if ! grep -Fxq 'super.img' /tmp/tar-list.txt; then
+            echo "ERROR: super.img is missing from the TAR."
+            cat /tmp/tar-list.txt
+            exit 1
+          fi
+
+          mkdir -p /tmp/output
+          OUT="/tmp/output/super_repack_38092128263.tar.md5"
+          cp "$SRC" "$OUT"
+
+          HASH=$(md5sum -t "$SRC" | awk '{print $1}')
+          printf '%s  %s\n' "$HASH" "$(basename "$SRC")" >> "$OUT"
+
+          echo "=== Verify appended MD5 footer ==="
+          python3 - "$OUT" <<'PY'
+          import hashlib, os, re, sys
+
+          path = sys.argv[1]
+          size = os.path.getsize(path)
+
+          with open(path, "rb") as f:
+              f.seek(max(0, size - 512))
+              tail = f.read()
+
+          pos = tail.rfind(b"\0")
+          if pos < 0:
+              raise SystemExit("ERROR: TAR end marker not found.")
+
+          lines = tail[pos + 1:].splitlines()
+          if not lines:
+              raise SystemExit("ERROR: MD5 footer not found.")
+
+          line = lines[-1]
+          match = re.match(rb"^([0-9a-fA-F]{32})\s+.+$", line)
+          if not match:
+              raise SystemExit("ERROR: Invalid MD5 footer format.")
+
+          expected = match.group(1).decode().lower()
+          payload_size = size - len(line) - 1
+
+          md5 = hashlib.md5()
+          with open(path, "rb") as f:
+              remaining = payload_size
+              while remaining:
+                  block = f.read(min(4 * 1024 * 1024, remaining))
+                  if not block:
+                      raise SystemExit("ERROR: Unexpected end of file.")
+                  md5.update(block)
+                  remaining -= len(block)
+
+          actual = md5.hexdigest()
+          if actual != expected:
+              raise SystemExit(f"ERROR: MD5 mismatch: {actual} != {expected}")
+
+          print("MD5 footer verified successfully.")
+          print("TAR payload bytes:", payload_size)
+          print("MD5:", actual)
+          PY
+
+          echo "=== Result file ==="
+          ls -lh "$OUT"
+          sha256sum "$OUT"
+
+      - name: Upload TAR.MD5 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: super-repack-38092128263-tar-md5
+          path: /tmp/output/super_repack_38092128263.tar.md5
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
