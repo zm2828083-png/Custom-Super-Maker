@@ -1,0 +1,125 @@
+name: Inspect existing super image
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download existing ROM artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: super-repack-38092128263
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: 38094123361
+          path: /tmp/rom-artifact
+
+      - name: Inspect archive and image
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ARCHIVE=$(find /tmp/rom-artifact -type f -name 'super_repack_38092128263.tar' -print -quit)
+          if [ -z "$ARCHIVE" ]; then
+            echo "ERROR: TAR archive not found."
+            find /tmp/rom-artifact -maxdepth 3 -type f -ls
+            exit 1
+          fi
+
+          echo "=== ARCHIVE ==="
+          ls -lh "$ARCHIVE"
+          sha256sum "$ARCHIVE"
+          tar -tvf "$ARCHIVE"
+
+          echo "=== EXTRACT SUPER IMAGE ==="
+          tar -xOf "$ARCHIVE" super.img > /tmp/super.img
+          rm -f "$ARCHIVE"
+
+          ls -lh /tmp/super.img
+          file /tmp/super.img
+          sha256sum /tmp/super.img
+
+          echo "=== ANDROID SPARSE HEADER ==="
+          python3 - <<'PY'
+          import struct, os
+
+          path = "/tmp/super.img"
+          size = os.path.getsize(path)
+
+          with open(path, "rb") as f:
+              data = f.read(28)
+
+          if len(data) < 28:
+              raise SystemExit("ERROR: Image header is too short.")
+
+          values = struct.unpack("<IHHHHIIII", data)
+          magic, major, minor, file_hdr, chunk_hdr, block_size, blocks, chunks, checksum = values
+
+          print(f"Physical size: {size} bytes")
+          print(f"Header magic: 0x{magic:08x}")
+
+          if magic == 0xed26ff3a:
+              print("Format: Android sparse image")
+              print(f"Version: {major}.{minor}")
+              print(f"Block size: {block_size}")
+              print(f"Total blocks: {blocks}")
+              print(f"Logical image size: {block_size * blocks} bytes")
+              print(f"Chunk count: {chunks}")
+          else:
+              print("Format: Not identified as Android sparse from its header")
+              print("First 32 bytes:", data[:32].hex())
+          PY
+
+          SPARSE=$(python3 -c 'import struct; f=open("/tmp/super.img","rb"); b=f.read(4); print("yes" if len(b)==4 and struct.unpack("<I",b)[0]==0xed26ff3a else "no")')
+
+          if [ "$SPARSE" = "yes" ]; then
+            echo "=== EXPAND SPARSE IMAGE FOR PARTITION-TABLE CHECK ==="
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq android-sdk-libsparse-utils
+            simg2img /tmp/super.img /tmp/super.raw.img
+            rm -f /tmp/super.img
+            IMAGE=/tmp/super.raw.img
+          else
+            IMAGE=/tmp/super.img
+          fi
+
+          echo "=== DYNAMIC PARTITION METADATA ==="
+          LPDUMP=$(find tools -type f -name lpdump -print -quit || true)
+
+          if [ -n "$LPDUMP" ]; then
+            chmod +x "$LPDUMP"
+            if "$LPDUMP" "$IMAGE" -j > /tmp/lpdump.json 2>/tmp/lpdump.err; then
+              jq '{
+                block_devices: [.block_devices[]? | {name,size}],
+                groups: [.groups[]? | {name,maximum_size}],
+                partitions: [.partitions[]? | {name,size,group_name,attributes}]
+              }' /tmp/lpdump.json
+            else
+              echo "lpdump could not read the image:"
+              cat /tmp/lpdump.err
+            fi
+          else
+            echo "lpdump tool not present in repository."
+          fi
+
+          echo "=== INSPECTION FINISHED ==="
+          echo "This is an image-format and metadata check, not proof the phone will boot."
